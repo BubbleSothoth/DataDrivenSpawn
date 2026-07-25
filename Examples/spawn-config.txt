@@ -1,0 +1,3 @@
+# 固定五列与 JSON 之间均使用 Tab；本文件的两条数据应各自保持在同一行。
+1000	Enemy01	0	5	0	{"ComponentVar":[{"Component":"Enemy01Ctrl","Variables":[{"Name":"targetPosition","Data":{"x":0,"y":0,"z":0}},{"Name":"moveSpeed","Data":5},{"Name":"bulletPrefab","Data":"Bullet-001"}]}]}
+2500	Boss01	0	6	0	{"ComponentVar":[{"Component":"Boss01Ctrl","Variables":[{"Name":"HP","Data":5000},{"Name":"MoveSpeed","Data":3}]}]}

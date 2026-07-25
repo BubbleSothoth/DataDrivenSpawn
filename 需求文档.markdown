@@ -1,0 +1,1119 @@
+# 数据驱动对象刷新系统设计文档
+
+## 1. 项目目标
+
+实现一个通用的数据驱动对象刷新系统。
+
+系统应具有以下能力：
+
+1. 根据刷新时间自动创建Prefab。
+2. 根据JSON自动为对象添加Component。
+3. 根据JSON自动初始化Component成员变量。
+4. 不允许针对任何Component编写特殊代码。
+5. 系统应完全依赖反射实现自动配置。
+
+整个系统应具有高度可扩展性，以便后续支持Boss、子弹、UI、特效等所有对象。
+
+---
+
+# 2. 工程结构
+
+建议建立如下目录：
+
+```
+Scripts
+│
+├── Spawn
+│   ├── SpawnController.cs
+│   ├── ComponentInitializer.cs
+│   ├── JsonDataDefine.cs
+│   ├── TypeConverter.cs
+│   ├── ReflectionCache.cs
+│   └── JsonParser.cs（可选）
+│
+└── Enemy
+```
+
+---
+
+# 3. SpawnController职责
+
+SpawnController只负责：
+
+- 读取Spawn文本
+- 创建Prefab
+- 调用ComponentInitializer初始化对象
+
+不得负责：
+
+- JSON解析
+- Component添加
+- 字段赋值
+- 类型转换
+
+SpawnController保持业务简单。
+
+---
+
+# 4. Prefab注册表
+
+继续使用当前Prefab注册表。
+
+```
+Inspector
+
+PrefabTable
+
+Enemy01
+Enemy02
+Bullet-001
+Boss01
+...
+```
+
+启动时建立
+
+```
+Dictionary<string, GameObject>
+```
+
+key为
+
+```
+prefab.name
+```
+
+供整个系统共享。
+
+以后GameObject引用均从这里查找。
+
+禁止使用Resources.Load。
+
+---
+
+# 5. Spawn文本格式
+
+每一行格式：
+
+```
+createTime\tcreateName\tposX\tposY\tposZ\tjson
+```
+
+示例：
+
+```
+1000    Enemy01    0    5    0    {...json...}
+```
+
+字段说明：
+
+|字段|说明|
+|----|----|
+|createTime|刷新时间(ms)|
+|createName|Prefab名称|
+|posX|出生位置|
+|posY|出生位置|
+|posZ|出生位置|
+|json|对象初始化数据|
+
+json字段允许包含Tab。
+
+因此建议：
+
+读取前5列后，
+
+剩余字符串全部作为JSON。
+
+不要Split全部字符串。
+
+---
+
+# 6. JSON结构
+
+采用如下结构：
+
+```json
+{
+  "ComponentVar":[
+    {
+      "Component":"Enemy01Ctrl",
+      "Variables":[
+        {
+          "Name":"targetPosition",
+          "Data":{
+            "x":0,
+            "y":0,
+            "z":0
+          }
+        },
+        {
+          "Name":"moveSpeed",
+          "Data":5
+        },
+        {
+          "Name":"bulletPrefab",
+          "Data":"Bullet-001"
+        }
+      ]
+    }
+  ]
+}
+```
+
+注意：
+
+删除Type字段。
+
+类型全部由反射自动推导。
+
+---
+
+# 7. ComponentInitializer职责
+
+提供唯一接口：
+
+```csharp
+Apply(
+    GameObject obj,
+    JsonRoot root,
+    Dictionary<string, GameObject> prefabDictionary)
+```
+
+流程：
+
+```
+Component列表
+
+↓
+
+Component不存在
+
+↓
+
+AddComponent
+
+↓
+
+遍历变量
+
+↓
+
+找到Field
+
+↓
+
+转换类型
+
+↓
+
+SetValue
+```
+
+---
+
+# 8. Component查找
+
+不得写：
+
+```
+if(component=="Enemy01Ctrl")
+```
+
+必须：
+
+```
+Type.GetType()
+
+Assembly.GetTypes()
+```
+
+自动查找。
+
+支持任何脚本。
+
+---
+
+# 9. 字段查找
+
+必须使用：
+
+```
+FieldInfo
+```
+
+禁止switch。
+
+例如：
+
+```
+moveSpeed
+
+↓
+
+FieldInfo
+
+↓
+
+SetValue()
+```
+
+---
+
+# 10. ReflectionCache
+
+避免：
+
+每次
+
+```
+GetField()
+```
+
+建议建立：
+
+```
+Dictionary<Type,
+    Dictionary<string,FieldInfo>>
+```
+
+第一次查询：
+
+缓存。
+
+以后直接使用缓存。
+
+---
+
+# 11. TypeConverter
+
+负责：
+
+```
+Json
+
+↓
+
+目标类型
+```
+
+统一转换。
+
+不得在ComponentInitializer中写任何类型判断。
+
+提供接口：
+
+```csharp
+object Convert(
+    object jsonData,
+    Type targetType,
+    Dictionary<string,GameObject> prefabDictionary);
+```
+
+---
+
+# 12. 必须支持的数据类型
+
+必须支持：
+
+```
+bool
+
+int
+
+long
+
+float
+
+double
+
+string
+
+Vector2
+
+Vector3
+
+Quaternion
+
+Color
+
+GameObject
+
+Enum
+```
+
+GameObject：
+
+Data为字符串。
+
+例如：
+
+```
+Bullet-001
+```
+
+去PrefabDictionary查找。
+
+---
+
+# 13. Vector结构
+
+例如：
+
+```json
+{
+    "x":1,
+    "y":2,
+    "z":3
+}
+```
+
+转换：
+
+```
+Vector3(1,2,3)
+```
+
+---
+
+# 14. Quaternion
+
+JSON：
+
+```json
+{
+    "x":0,
+    "y":0,
+    "z":90
+}
+```
+
+表示欧拉角。
+
+转换：
+
+```
+Quaternion.Euler()
+```
+
+不要直接构造Quaternion。
+
+---
+
+# 15. Color
+
+JSON：
+
+```json
+{
+    "r":1,
+    "g":0,
+    "b":0,
+    "a":1
+}
+```
+
+转换：
+
+```
+Color
+```
+
+---
+
+# 16. Enum
+
+Data：
+
+```
+"Idle"
+```
+
+自动：
+
+```
+Enum.Parse()
+```
+
+---
+
+# 17. GameObject
+
+例如：
+
+```
+Bullet-001
+```
+
+转换：
+
+```
+PrefabDictionary["Bullet-001"]
+```
+
+赋值。
+
+---
+
+# 18. AddComponent规则
+
+若对象已有：
+
+```
+Enemy01Ctrl
+```
+
+直接使用。
+
+否则：
+
+```
+AddComponent
+```
+
+不得重复添加。
+
+---
+
+# 19. 字段访问规则
+
+允许：
+
+```
+public field
+```
+
+后续可扩展：
+
+```
+[SerializeField]
+private field
+```
+
+当前版本先支持public。
+
+---
+
+# 20. 错误处理
+
+Component不存在：
+
+```
+Warning
+```
+
+继续。
+
+字段不存在：
+
+```
+Warning
+```
+
+继续。
+
+类型转换失败：
+
+```
+Error
+```
+
+继续初始化其它字段。
+
+JSON错误：
+
+```
+Error
+```
+
+放弃当前对象初始化。
+
+不得导致整个关卡停止。
+
+---
+
+# 21. 性能要求
+
+SpawnController：
+
+不得每帧遍历全部对象。
+
+继续保持：
+
+```
+currentIndex
+```
+
+推进。
+
+JSON：
+
+每个对象只解析一次。
+
+Reflection：
+
+必须缓存。
+
+GameObject：
+
+Dictionary查询。
+
+整体支持：
+
+```
+10000+
+```
+
+对象初始化。
+
+---
+
+# 22. 后续扩展接口
+
+以后应无需修改已有代码即可支持：
+
+```
+List<T>
+
+Array
+
+AnimationCurve
+
+Gradient
+
+Sprite
+
+Material
+
+AudioClip
+
+Texture
+
+ScriptableObject
+
+Dictionary
+```
+
+只需修改TypeConverter。
+
+---
+
+# 23. 编码规范
+
+全部代码遵守：
+
+- PascalCase
+- private字段前缀不加m_
+- XML注释
+- 不使用魔法字符串
+- 所有反射操作封装
+- 不允许业务逻辑与反射逻辑耦合
+
+---
+
+# 24. 最终目标
+
+最终系统应满足：
+
+新增一个脚本：
+
+```
+Boss01Ctrl
+```
+
+新增一个Prefab：
+
+```
+Boss01.prefab
+```
+
+JSON：
+
+```json
+{
+    "Component":"Boss01Ctrl",
+    "Variables":[
+        {
+            "Name":"HP",
+            "Data":5000
+        },
+        {
+            "Name":"MoveSpeed",
+            "Data":3
+        }
+    ]
+}
+```
+
+无需修改任何已有代码。
+
+运行后即可：
+
+- 自动AddComponent
+- 自动初始化字段
+- 自动引用Prefab
+- 自动完成所有赋值
+
+整个系统应真正实现完全数据驱动。
+---
+
+# 25. 架构要求（必须遵守）
+
+整个系统必须遵循 **开放-封闭原则（Open/Closed Principle，OCP）**：
+
+> **对扩展开放，对修改关闭。**
+
+具体要求如下：
+
+## 25.1 核心业务模块保持稳定
+
+以下模块属于系统核心模块：
+
+- SpawnController
+- ComponentInitializer
+- ReflectionCache
+
+在后续新增功能时，原则上不得修改上述模块的业务逻辑。
+
+例如：
+
+新增：
+
+```
+Vector4
+AnimationCurve
+Gradient
+Sprite
+Material
+AudioClip
+Texture
+ScriptableObject
+List<T>
+Dictionary
+```
+
+等数据类型时，不允许修改：
+
+```
+SpawnController.cs
+```
+
+也不允许修改：
+
+```
+ComponentInitializer.cs
+```
+
+而应通过扩展类型转换器实现。
+
+---
+
+## 25.2 TypeConverter作为唯一扩展入口
+
+所有数据类型转换逻辑必须集中在：
+
+```
+TypeConverter
+```
+
+例如：
+
+```
+Json
+
+↓
+
+TypeConverter
+
+↓
+
+object
+
+↓
+
+Field.SetValue()
+```
+
+ComponentInitializer不得出现：
+
+```csharp
+if(fieldType == typeof(Vector3))
+```
+
+或：
+
+```csharp
+switch(fieldType.Name)
+```
+
+所有类型判断必须由TypeConverter统一处理。
+
+---
+
+## 25.3 新增数据类型不得影响已有代码
+
+例如：
+
+当前支持：
+
+```
+float
+Vector3
+GameObject
+```
+
+后来增加：
+
+```
+Sprite
+```
+
+应仅需：
+
+1. 新增Sprite转换器。
+2. 在TypeConverter中注册。
+
+不得修改：
+
+```
+SpawnController
+```
+
+不得修改：
+
+```
+ComponentInitializer
+```
+
+不得修改：
+
+```
+ReflectionCache
+```
+
+---
+
+## 25.4 Component无需注册
+
+新增脚本：
+
+```
+Boss01Ctrl
+```
+
+系统应自动支持。
+
+不得：
+
+```
+switch(ComponentName)
+```
+
+不得：
+
+```
+if(Component=="Boss01Ctrl")
+```
+
+所有Component均通过反射自动发现。
+
+---
+
+## 25.5 TypeConverter推荐采用注册机制
+
+建议采用注册式架构，而不是大量if/switch。
+
+例如：
+
+```
+Dictionary<Type, ITypeConverter>
+```
+
+其中：
+
+```
+ITypeConverter
+```
+
+接口定义：
+
+```csharp
+public interface ITypeConverter
+{
+    bool CanConvert(Type type);
+
+    object Convert(
+        object jsonData,
+        Type targetType,
+        Dictionary<string, GameObject> prefabDictionary);
+}
+```
+
+例如：
+
+```
+FloatConverter
+
+Vector2Converter
+
+Vector3Converter
+
+ColorConverter
+
+QuaternionConverter
+
+GameObjectConverter
+
+EnumConverter
+```
+
+启动时统一注册。
+
+TypeConverter仅负责：
+
+```
+找到对应Converter
+
+↓
+
+执行Convert()
+```
+
+以后增加：
+
+```
+AnimationCurveConverter
+```
+
+只需新增一个Converter并注册即可。
+
+---
+
+## 25.6 ReflectionCache独立
+
+Reflection缓存不得依赖任何业务逻辑。
+
+缓存仅负责：
+
+```
+Type
+
+↓
+
+FieldInfo
+```
+
+任何Component均共享该缓存。
+
+不得因为新增脚本而修改缓存实现。
+
+---
+
+## 25.7 目标
+
+最终系统应达到：
+
+新增一个Component：
+
+```
+Boss01Ctrl
+```
+
+新增一个类型：
+
+```
+AnimationCurve
+```
+
+新增一个Prefab：
+
+```
+Laser.prefab
+```
+
+整个系统仅需：
+
+- 新建Component脚本；
+- （若是新数据类型）新增一个Converter并注册；
+- 修改JSON配置；
+
+除此之外，不需要修改任何已有框架代码。
+
+框架应保持长期稳定，仅通过扩展实现新功能。
+---
+
+# 26. 代码注释规范（必须遵守）
+
+为了保证框架具有良好的可维护性，生成的所有代码必须包含完整、规范的中文注释。
+
+## 26.1 注释语言
+
+所有注释统一使用：
+
+```
+简体中文
+```
+
+不得使用：
+
+- 英文注释；
+- 拼音注释；
+- 无意义注释。
+
+---
+
+## 26.2 XML文档注释
+
+所有：
+
+- public类
+- public接口
+- public方法
+- public属性
+- public字段（必要时）
+
+均应添加XML文档注释。
+
+例如：
+
+```csharp
+/// <summary>
+/// 根据JSON初始化GameObject上的所有组件。
+/// </summary>
+/// <param name="obj">待初始化的对象。</param>
+/// <param name="root">解析后的JSON数据。</param>
+/// <param name="prefabDictionary">Prefab注册表。</param>
+public static void Apply(
+    GameObject obj,
+    JsonRoot root,
+    Dictionary<string, GameObject> prefabDictionary)
+{
+}
+```
+
+---
+
+## 26.3 普通代码注释
+
+对于：
+
+- 复杂算法；
+- 反射；
+- 类型转换；
+- 缓存；
+- 性能优化；
+- 容易误解的逻辑；
+
+必须编写说明注释。
+
+例如：
+
+```csharp
+// 首次访问某个Component时，缓存其FieldInfo。
+// 后续所有对象直接使用缓存，避免重复反射造成性能损失。
+```
+
+而不是：
+
+```csharp
+// 获取Field
+```
+
+后者属于没有意义的注释。
+
+---
+
+## 26.4 注释内容要求
+
+注释应说明：
+
+- 为什么这样实现；
+- 设计目的；
+- 数据流向；
+- 性能考虑；
+- 特殊情况。
+
+尽量避免只描述代码本身。
+
+例如：
+
+不推荐：
+
+```csharp
+// 给变量赋值
+field.SetValue(...);
+```
+
+推荐：
+
+```csharp
+// 根据反射获取到的字段信息，将经过类型转换后的数据写入目标组件。
+// 此处统一通过FieldInfo赋值，使系统无需针对任何Component编写特殊逻辑。
+field.SetValue(...);
+```
+
+---
+
+## 26.5 文件头注释
+
+每个源码文件应包含文件说明。
+
+例如：
+
+```csharp
+/******************************************************************************
+ * 文件名称：ComponentInitializer.cs
+ *
+ * 功能描述：
+ *     根据JSON配置自动为GameObject添加Component，
+ *     并通过反射初始化所有公开字段。
+ *
+ * 设计原则：
+ *     1. 不依赖具体Component类型；
+ *     2. 所有初始化均通过反射完成；
+ *     3. 类型转换统一交由TypeConverter处理；
+ *     4. 遵循开放-封闭原则。
+ ******************************************************************************/
+```
+
+---
+
+## 26.6 方法内部注释
+
+对于流程较长的方法，应按逻辑分段添加注释。
+
+例如：
+
+```csharp
+// =========================
+// 查找或添加Component
+// =========================
+
+// =========================
+// 遍历变量列表
+// =========================
+
+// =========================
+// 类型转换
+// =========================
+
+// =========================
+// 字段赋值
+// =========================
+```
+
+便于阅读和后续维护。
+
+---
+
+## 26.7 注释完整性要求
+
+生成的代码应达到以下标准：
+
+- 所有类均有说明；
+- 所有公开接口均有XML注释；
+- 所有复杂逻辑均有中文解释；
+- 不出现"TODO"、"待实现"等占位内容；
+- 不省略关键实现步骤；
+- 保证代码可以直接用于生产开发，而非示例代码。
+
+注释应与代码保持一致，不得出现过时、错误或与实现不符的描述。
