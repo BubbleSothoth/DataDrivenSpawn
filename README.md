@@ -1,5 +1,7 @@
 # 数据驱动导演系统
 
+正式使用说明见 [`Docs/DataDrivenSpawn-User-Manual-GJB438C.md`](Docs/DataDrivenSpawn-User-Manual-GJB438C.md)，同时提供按 GJB 438C-2021 附录 Q 结构编制的 [`Word 版用户手册`](Docs/DataDrivenSpawn-User-Manual-GJB438C.docx)。
+
 这是一套可直接接入 Unity 的通用导演系统。它按时间或条件创建 Prefab，通过反射自动发现/添加任意 `Component`，再根据目标字段的真实类型转换 JSON 数据并写入 `public field`。核心流程不包含具体业务组件分支，也不使用 `Resources.Load`。
 
 ## 接入
