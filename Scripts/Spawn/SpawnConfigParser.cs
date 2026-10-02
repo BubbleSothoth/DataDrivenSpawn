@@ -2,12 +2,12 @@
  * 文件名称：SpawnConfigParser.cs
  *
  * 功能描述：
- *     解析刷新文本的固定列和剩余 JSON，生成按时间排序的刷新记录。
+ *     将导演文本解析为按原文件顺序执行的刷新与等待指令。
  *
  * 设计原则：
- *     1. 将文本及 JSON 解析职责从 SpawnController 中彻底分离；
- *     2. 只识别前五个制表符，确保 JSON 内部允许继续包含 Tab；
- *     3. 单行错误仅影响当前记录，不阻断整个关卡。
+ *     1. 固定列只使用 Tab 分隔，JSON 内部可以继续包含 Tab；
+ *     2. 指令严格保留原文件顺序，使等待条件可以形成可靠的流程屏障；
+ *     3. 单行错误只影响当前指令，不中断整个关卡。
  ******************************************************************************/
 
 using System;
@@ -18,67 +18,75 @@ using UnityEngine;
 
 namespace DataDrivenSpawn
 {
-    /// <summary>
-    /// 表示已经解析完成、等待按时间创建的单条刷新记录。
-    /// </summary>
-    public sealed class SpawnRecord
+    /// <summary>表示导演系统可以顺序执行的一条指令。</summary>
+    public abstract class DirectorInstruction
     {
-        /// <summary>相对关卡开始时间的创建时刻，单位为毫秒。</summary>
-        public long CreateTime { get; private set; }
-
-        /// <summary>Prefab 注册名称。</summary>
-        public string CreateName { get; private set; }
-
-        /// <summary>对象的世界坐标出生位置。</summary>
-        public Vector3 Position { get; private set; }
-
-        /// <summary>
-        /// 对象初始化配置。当前行 JSON 非法时为 null，此时对象仍会创建但跳过初始化。
-        /// </summary>
-        public JsonRoot Root { get; private set; }
-
-        /// <summary>记录在刷新文本中的原始行号，用于稳定排序和错误定位。</summary>
+        /// <summary>指令在导演文本中的原始行号。</summary>
         public int SourceLine { get; private set; }
 
-        /// <summary>
-        /// 创建一条已解析的刷新记录。
-        /// </summary>
-        /// <param name="createTime">创建时刻，单位为毫秒。</param>
-        /// <param name="createName">Prefab 注册名称。</param>
-        /// <param name="position">世界坐标出生位置。</param>
-        /// <param name="root">对象初始化配置，解析失败时为 null。</param>
-        /// <param name="sourceLine">原始文本行号。</param>
-        public SpawnRecord(long createTime, string createName, Vector3 position, JsonRoot root, int sourceLine)
+        /// <summary>创建带来源行号的导演指令。</summary>
+        protected DirectorInstruction(int sourceLine) { SourceLine = sourceLine; }
+    }
+
+    /// <summary>表示一条按时间创建并初始化对象的指令。</summary>
+    public sealed class SpawnRecord : DirectorInstruction
+    {
+        /// <summary>相对导演启动时刻的创建时间，单位为毫秒。</summary>
+        public long CreateTime { get; private set; }
+        /// <summary>Prefab 注册名称。</summary>
+        public string CreateName { get; private set; }
+        /// <summary>相对或世界出生坐标，具体空间由 SpawnController 配置。</summary>
+        public Vector3 Position { get; private set; }
+        /// <summary>对象所属分组；空字符串表示不追踪分组。</summary>
+        public string Group { get; private set; }
+        /// <summary>对象的组件与公开字段初始化配置。</summary>
+        public JsonRoot Root { get; private set; }
+
+        /// <summary>创建一条对象刷新指令。</summary>
+        public SpawnRecord(long createTime, string createName, Vector3 position, string group, JsonRoot root, int sourceLine)
+            : base(sourceLine)
         {
             CreateTime = createTime;
             CreateName = createName;
             Position = position;
+            Group = group;
             Root = root;
-            SourceLine = sourceLine;
         }
     }
 
-    /// <summary>
-    /// 提供刷新文本到刷新记录列表的转换能力。
-    /// </summary>
+    /// <summary>表示一条等待条件成立后才继续后续流程的指令。</summary>
+    public sealed class WaitRecord : DirectorInstruction
+    {
+        /// <summary>条件关键字，不区分大小写。</summary>
+        public string Condition { get; private set; }
+        /// <summary>传递给条件求值器的只读参数。</summary>
+        public IReadOnlyList<string> Arguments { get; private set; }
+
+        /// <summary>创建一条条件等待指令。</summary>
+        public WaitRecord(string condition, IReadOnlyList<string> arguments, int sourceLine) : base(sourceLine)
+        {
+            Condition = condition;
+            Arguments = arguments;
+        }
+    }
+
+    /// <summary>提供导演文本到顺序指令列表的转换能力。</summary>
     public static class SpawnConfigParser
     {
-        private const int FixedColumnCount = 5;
         private const char ColumnSeparator = '\t';
         private const char CommentPrefix = '#';
+        private const char CommandPrefix = '$';
+        private const int LegacyFixedColumnCount = 5;
+        private const int GroupedFixedColumnCount = 6;
 
-        /// <summary>
-        /// 解析完整刷新文本，并按创建时间和原始行号排序。
-        /// </summary>
-        /// <param name="text">刷新文本内容。</param>
-        /// <returns>有效固定列对应的刷新记录；JSON 错误会保留记录并将 Root 设为 null。</returns>
-        public static IReadOnlyList<SpawnRecord> Parse(string text)
+        /// <summary>解析完整导演文本，并保留全部有效指令的原始顺序。</summary>
+        public static IReadOnlyList<DirectorInstruction> Parse(string text)
         {
-            List<SpawnRecord> records = new List<SpawnRecord>();
+            List<DirectorInstruction> instructions = new List<DirectorInstruction>();
             if (string.IsNullOrWhiteSpace(text))
             {
-                Debug.LogWarning("刷新文本为空，本关卡不会创建任何配置对象。");
-                return records;
+                Debug.LogWarning("导演文本为空，本关卡不会创建任何配置对象。");
+                return instructions;
             }
 
             using (StringReader reader = new StringReader(text))
@@ -91,92 +99,127 @@ namespace DataDrivenSpawn
                     string trimmed = line.Trim();
                     if (trimmed.Length == 0 || trimmed[0] == CommentPrefix) continue;
 
-                    SpawnRecord record;
-                    if (TryParseLine(line, lineNumber, out record))
-                    {
-                        records.Add(record);
-                    }
+                    DirectorInstruction instruction;
+                    bool parsed = trimmed[0] == CommandPrefix
+                        ? TryParseCommand(trimmed, lineNumber, out instruction)
+                        : TryParseSpawn(line, lineNumber, out instruction);
+                    if (parsed) instructions.Add(instruction);
                 }
             }
 
-            // 时间相同时按原始行号排序，保证配置顺序在不同运行环境中完全一致。
-            records.Sort(delegate(SpawnRecord left, SpawnRecord right)
-            {
-                int timeComparison = left.CreateTime.CompareTo(right.CreateTime);
-                return timeComparison != 0 ? timeComparison : left.SourceLine.CompareTo(right.SourceLine);
-            });
-
-            return records;
+            return instructions;
         }
 
-        private static bool TryParseLine(string line, int lineNumber, out SpawnRecord record)
+        private static bool TryParseCommand(string line, int lineNumber, out DirectorInstruction instruction)
         {
-            record = null;
-            string[] fixedColumns;
-            string json;
-            if (!TryExtractColumns(line, out fixedColumns, out json))
+            instruction = null;
+            string[] tokens = line.Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
+            if (tokens.Length < 2 || !string.Equals(tokens[0], "$WAIT", StringComparison.OrdinalIgnoreCase))
             {
-                Debug.LogWarning("刷新文本第 " + lineNumber + " 行列数不足，已跳过。前五列必须使用 Tab 分隔。");
+                Debug.LogWarning("导演文本第 " + lineNumber + " 行指令非法。格式应为：$WAIT 条件 [参数...]。");
                 return false;
+            }
+
+            string condition = NormalizeCondition(tokens[1]);
+            List<string> arguments = new List<string>(tokens.Length - 2);
+            for (int index = 2; index < tokens.Length; index++) arguments.Add(tokens[index]);
+            instruction = new WaitRecord(condition, arguments, lineNumber);
+            return true;
+        }
+
+        private static string NormalizeCondition(string condition)
+        {
+            string normalized = condition.Trim().ToUpperInvariant();
+            // 兼容项目现有文本中的“Destory”拼写，并保留更直观的 Destroy 别名。
+            if (normalized == "DESTORY" || normalized == "DESTROY" || normalized == "GROUP_DESTROYED")
+            {
+                return DirectorConditionNames.GroupEmpty;
+            }
+
+            return normalized;
+        }
+
+        private static bool TryParseSpawn(string line, int lineNumber, out DirectorInstruction instruction)
+        {
+            instruction = null;
+            string[] columns;
+            string json;
+            string group;
+
+            if (!TryExtractColumns(line, GroupedFixedColumnCount, out columns, out json) ||
+                columns[5].TrimStart().StartsWith("{", StringComparison.Ordinal))
+            {
+                if (!TryExtractColumns(line, LegacyFixedColumnCount, out columns, out json))
+                {
+                    Debug.LogWarning("导演文本第 " + lineNumber + " 行列数不足，已跳过。");
+                    return false;
+                }
+
+                group = string.Empty;
+            }
+            else
+            {
+                group = NormalizeGroup(columns[5]);
             }
 
             long createTime;
             float x;
             float y;
             float z;
-            string createName = fixedColumns[1].Trim();
-            if (!long.TryParse(fixedColumns[0].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out createTime) || createTime < 0)
+            string createName = columns[1].Trim();
+            if (!long.TryParse(columns[0].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out createTime) || createTime < 0)
             {
-                Debug.LogWarning("刷新文本第 " + lineNumber + " 行的 createTime 非法，已跳过。");
+                Debug.LogWarning("导演文本第 " + lineNumber + " 行的 createTime 非法，已跳过。");
                 return false;
             }
 
             if (createName.Length == 0)
             {
-                Debug.LogWarning("刷新文本第 " + lineNumber + " 行的 createName 为空，已跳过。");
+                Debug.LogWarning("导演文本第 " + lineNumber + " 行的 createName 为空，已跳过。");
                 return false;
             }
 
-            if (!TryParseFiniteFloat(fixedColumns[2], out x) ||
-                !TryParseFiniteFloat(fixedColumns[3], out y) ||
-                !TryParseFiniteFloat(fixedColumns[4], out z))
+            if (!TryParseFiniteFloat(columns[2], out x) || !TryParseFiniteFloat(columns[3], out y) ||
+                !TryParseFiniteFloat(columns[4], out z))
             {
-                Debug.LogWarning("刷新文本第 " + lineNumber + " 行的出生坐标非法，已跳过。");
+                Debug.LogWarning("导演文本第 " + lineNumber + " 行的出生坐标非法，已跳过。");
                 return false;
             }
 
             JsonRoot root = null;
-            try
+            if (!string.IsNullOrWhiteSpace(json))
             {
-                // 每条记录在读取阶段只解析一次，刷新时直接复用结果，避免运行期重复 JSON 开销。
-                root = JsonParser.Parse(json);
-            }
-            catch (FormatException exception)
-            {
-                Debug.LogError("刷新文本第 " + lineNumber + " 行 JSON 解析失败；对象仍会按时创建，但会放弃该对象初始化。原因：" + exception.Message);
+                try { root = JsonParser.Parse(json); }
+                catch (FormatException exception)
+                {
+                    Debug.LogError("导演文本第 " + lineNumber + " 行 JSON 解析失败；对象仍会创建，但会跳过参数初始化。原因：" + exception.Message);
+                }
             }
 
-            record = new SpawnRecord(createTime, createName, new Vector3(x, y, z), root, lineNumber);
+            instruction = new SpawnRecord(createTime, createName, new Vector3(x, y, z), group, root, lineNumber);
             return true;
         }
 
-        private static bool TryExtractColumns(string line, out string[] fixedColumns, out string json)
+        private static string NormalizeGroup(string group)
         {
-            fixedColumns = new string[FixedColumnCount];
-            json = null;
-            int columnStart = 0;
+            string normalized = group.Trim();
+            return normalized == "-" ? string.Empty : normalized;
+        }
 
-            // 仅消费前五个分隔符，之后的完整字符串全部属于 JSON，内部 Tab 不会被破坏。
-            for (int columnIndex = 0; columnIndex < FixedColumnCount; columnIndex++)
+        private static bool TryExtractColumns(string line, int fixedColumnCount, out string[] columns, out string remainder)
+        {
+            columns = new string[fixedColumnCount];
+            remainder = null;
+            int columnStart = 0;
+            for (int columnIndex = 0; columnIndex < fixedColumnCount; columnIndex++)
             {
                 int separatorIndex = line.IndexOf(ColumnSeparator, columnStart);
                 if (separatorIndex < 0) return false;
-
-                fixedColumns[columnIndex] = line.Substring(columnStart, separatorIndex - columnStart);
+                columns[columnIndex] = line.Substring(columnStart, separatorIndex - columnStart);
                 columnStart = separatorIndex + 1;
             }
 
-            json = line.Substring(columnStart).Trim();
+            remainder = line.Substring(columnStart).Trim();
             return true;
         }
 
