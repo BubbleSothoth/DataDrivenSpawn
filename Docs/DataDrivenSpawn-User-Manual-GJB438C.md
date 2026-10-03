@@ -1,17 +1,18 @@
 # DataDrivenSpawn 软件用户手册
 
-**文档编号：** DDS-SUM-001  
-**文档版本：** V1.0  
-**适用软件：** DataDrivenSpawn（main@70e5596819f57983bf9ad1c7853277a0e3d03b2b）  
-**文档状态：** 正式版  
-**编制日期：** 2026-10-02  
-**保密标识：** 公开  
+**文档编号：** DDS-SUM-001
+**文档版本：** V1.1
+**适用软件：** DataDrivenSpawn（指令集 V1.1）
+**文档状态：** 正式版
+**编制日期：** 2026-10-03
+**保密标识：** 公开
 
 ## 修改记录
 
 | 版本 | 日期 | 修改内容 | 修改者 |
 |---|---|---|---|
 | V1.0 | 2026-10-02 | 首次发布。依据 GJB 438C-2021 附录 Q 组织正文，覆盖安装、配置、操作、消息及故障恢复。 | DataDrivenSpawn 项目组 |
+| V1.1 | 2026-10-03 | 采用 DESTORY 分组等待语法，增加重设时间、移除分组、绝对时间等待和相对时长等待指令。 | DataDrivenSpawn 项目组 |
 
 ## 目录
 
@@ -36,8 +37,8 @@
 | 软件名称 | DataDrivenSpawn 数据驱动导演系统 |
 | 软件缩略名 | DDS |
 | 软件配置项 | `Scripts/Spawn` 目录内的 C# 源文件 |
-| 适用版本 | Git `main` 分支，基线提交 `70e5596819f57983bf9ad1c7853277a0e3d03b2b` |
-| 配置格式版本 | 七列刷新行、兼容六列刷新行；`$WAIT` 条件指令 |
+| 适用版本 | Git `main` 分支，指令集 V1.1 |
+| 配置格式版本 | 七列刷新行、兼容六列刷新行；`$WAIT`、`$RESET`、`$REMOVE` 指令 |
 | 发布渠道 | GitHub 仓库 `BubbleSothoth/DataDrivenSpawn` |
 
 ## 1.2 系统概述
@@ -66,8 +67,8 @@ DataDrivenSpawn 是面向 Unity 项目的数据驱动导演组件。用户以文
 | 编号或标识 | 文件名称 | 版本/日期 | 来源 |
 |---|---|---|---|
 | GJB 438C-2021 | 军用软件开发文档通用要求 | 2021-12-30 发布 | 标准公开发行渠道 |
-| DDS-README | DataDrivenSpawn README | 基线提交 `70e5596` | 本仓库 `README.md` |
-| DDS-REQ | DataDrivenSpawn 需求文档 | 基线提交 `70e5596` | 本仓库 `需求文档.markdown` |
+| DDS-README | DataDrivenSpawn README | 与本文档同一发布提交 | 本仓库 `README.md` |
+| DDS-REQ | DataDrivenSpawn 需求文档 | 仓库当前版本 | 本仓库 `需求文档.markdown` |
 | UNITY-MANUAL | Unity Manual / Scripting API | 与集成工程所用 Unity 版本一致 | Unity 官方文档 |
 
 注：本文档依据 GJB 438C-2021 第 5.17 条及附录 Q 的《软件用户手册》内容和正文结构编制。Unity 版本由宿主工程确定；发生接口差异时，以宿主工程所用版本的官方文档为准。
@@ -87,7 +88,9 @@ DataDrivenSpawn 是面向 Unity 项目的数据驱动导演组件。用户以文
 5. 为 Component 的可写 public 实例字段赋值；
 6. 按组跟踪由当前控制器创建且尚未销毁的对象；
 7. 接收外部代码设置的布尔信号；
-8. 自动发现和注册自定义条件、自定义类型转换器。
+8. 重设导演时间，或按绝对时间和相对时长等待；
+9. 解除既有对象的分组归属而不销毁对象；
+10. 自动发现和注册自定义条件、自定义类型转换器。
 
 受益情况：关卡流程与业务脚本解耦，常规波次和参数变更可通过文本完成。运行改进体现在配置只解析一次、指令索引单向前进、反射结果缓存和单帧执行数受限。使用收益取决于配置规模、Prefab 复杂度和宿主工程对象生命周期设计。
 
@@ -138,9 +141,10 @@ DataDrivenSpawn 是面向 Unity 项目的数据驱动导演组件。用户以文
 2. `Start` 记录导演起始时间；
 3. 每帧 `Update` 从当前索引开始顺序处理；
 4. 遇到未到时的刷新行或未满足的等待条件时暂停在当前行；
-5. 刷新行就绪后实例化 Prefab、登记分组并应用 JSON；
-6. `SpawnedObjectTracker` 在对象销毁时减少所属分组计数；
-7. 索引到达末尾时 `IsCompleted` 为 true，控制器停止调度。
+5. 遇到 `$RESET` 或 `$REMOVE` 时立即修改导演状态并继续；
+6. 刷新行就绪后实例化 Prefab、登记分组并应用 JSON；
+7. `SpawnedObjectTracker` 在对象销毁时解除跟踪；
+8. 索引到达末尾时 `IsCompleted` 为 true，控制器停止调度。
 
 用户可通过 `CurrentInstructionIndex`、`ElapsedMilliseconds`、`IsCompleted`、`HasSignal` 和 `GetLivingGroupCount` 查询状态。控制器每帧最多执行 `Maximum Instructions Per Frame` 条就绪指令；达到限额后，其余就绪指令延至下一帧。
 
@@ -151,6 +155,7 @@ DataDrivenSpawn 是面向 Unity 项目的数据驱动导演组件。用户以文
 - 等待条件不存在或求值抛出异常：输出错误并跳过该等待行，以避免流程永久锁死。
 - 控制器 GameObject 被禁用：Unity 不再调用 `Update`，流程实际挂起；重新启用后继续，时间是否推进取决于 `Use Unscaled Time` 和全局时间状态。
 - 调用 `Restart()`：索引和信号复位，起始时间重置；**既有实例不会被销毁，分组计数也不会清空**。需要全量复位时，集成项目应先安全销毁旧实例，再重启或重载场景。
+- 执行 `$REMOVE GROUP`：对象仍存活，但不再影响对应 `DESTORY` 等待。后续创建的同名分组对象会重新建立独立跟踪。
 - 配置破坏或误修改：从已验证 Git 提交恢复导演文本、场景和 Prefab；不要在运行中覆盖正在使用的 `TextAsset` 作为恢复手段。
 
 ## 3.6 保密性
@@ -228,7 +233,7 @@ DataDrivenSpawn 是面向 Unity 项目的数据驱动导演组件。用户以文
 
 ### 5.1.2 编排流程
 
-导演文本中的有效记录严格按文件顺序执行。刷新记录的 `createTime` 是导演启动后的绝对毫秒数，不是相对上一条记录的延时。等待指令形成屏障：其后的刷新记录必须同时满足屏障和自身的绝对时间条件。
+导演文本中的有效记录严格按文件顺序执行。刷新记录的 `createTime` 是当前导演时间轴上的绝对毫秒数，不是相对上一条记录的延时。`$RESET TIMER` 会改变后续刷新记录和 `TIMER UNTIL` 使用的时间基准。等待指令形成屏障：其后的刷新记录必须同时满足屏障和当前导演时间条件。
 
 ## 5.2 约定
 
@@ -262,21 +267,32 @@ createTime<Tab>createName<Tab>posX<Tab>posY<Tab>posZ<Tab>group<Tab>json
 
 兼容六列旧格式：省略 `group`，第五个 Tab 后全部内容作为 JSON。JSON 内部允许包含 Tab，因为解析器只切分固定数量的前置列。
 
-### 5.3.2 编写等待指令
+### 5.3.2 编写等待和控制指令
 
 ```text
-$WAIT TIME 5000
-$WAIT GROUP_EMPTY WaveA
+$WAIT DESTORY WaveA
 $WAIT SIGNAL BossIntroFinished
+$WAIT TIMER UNTIL 5000
+$WAIT TIMER SLEEP 1000
+$RESET TIMER
+$RESET TIMER 2500
+$REMOVE GROUP WaveA
 ```
 
-| 条件 | 参数 | 成立条件 |
+| 指令 | 参数 | 处理规则 |
 |---|---|---|
-| TIME | 1 个非负毫秒整数 | `ElapsedMilliseconds` 大于等于参数 |
-| GROUP_EMPTY | 1 个分组名 | 当前控制器追踪的该组存活数为 0 |
-| SIGNAL | 1 个信号名 | `SetSignal(name, true)` 已调用 |
+| `$WAIT DESTORY` | 1 个分组名 | 当前控制器追踪的该组存活数为 0 时放行 |
+| `$WAIT SIGNAL` | 1 个信号名 | `SetSignal(name, true)` 已调用时放行 |
+| `$WAIT TIMER UNTIL` | 1 个非负毫秒整数 | 导演时间达到参数时放行 |
+| `$WAIT TIMER SLEEP` | 1 个非负毫秒整数 | 从首次到达该指令起经过参数指定时长后放行 |
+| `$RESET TIMER` | 可选的非负毫秒整数 | 立即把导演时间重设为参数；省略时重设为 0 |
+| `$REMOVE GROUP` | 1 个非空分组名 | 立即解除此前已登记到该组的全部对象，不销毁对象 |
 
-`DESTROY`、`GROUP_DESTROYED` 和历史拼写 `DESTORY` 会归一化为 `GROUP_EMPTY`。条件不存在、参数错误或求值异常时，该等待行记录错误后被跳过。
+`TIMER UNTIL` 使用绝对时间。例如当前导演时间为 3000 ms，`$WAIT TIMER UNTIL 5000` 最多再等待 2000 ms。`TIMER SLEEP` 使用相对时长；无论首次到达时导演时间是多少，`$WAIT TIMER SLEEP 5000` 都从该时刻继续等待 5000 ms。
+
+`$REMOVE GROUP WaveA` 只影响执行该指令之前已登记到 WaveA 的对象。这些对象变为无分组状态，销毁时不再改变 WaveA 的存活数。该指令之后新创建的 WaveA 对象仍正常登记。
+
+为兼容旧配置，`GROUP_EMPTY`、`GROUP_DESTROYED` 和 `DESTROY` 仍按 `DESTORY` 处理；旧的 `$WAIT TIME ms` 仍按 `$WAIT TIMER UNTIL ms` 处理。新版配置应使用 V1.1 规范写法。条件不存在、参数错误或求值异常时，该等待行记录错误后被跳过；格式错误的控制指令在解析阶段被跳过。
 
 ### 5.3.3 配置 Component 和字段
 
@@ -357,7 +373,20 @@ public sealed class ScoreCondition : ISpawnConditionEvaluator
 
 实现 `ITypeConverter` 的公开、非抽象、具有无参构造函数的类即可自动发现。`CanConvert(Type)` 声明支持范围，`Convert` 返回可直接写入目标字段的值。也可调用 `TypeConverter.Register` 显式注册；后注册项优先并清空路由缓存。IL2CPP 工程应使用 `[Preserve]` 或等效 `link.xml` 保护扩展类。
 
-### 5.3.8 重启和状态查询
+### 5.3.8 时间和分组控制
+
+```text
+$RESET TIMER
+$WAIT TIMER SLEEP 500
+$REMOVE GROUP Escort
+$WAIT DESTORY Escort
+```
+
+上述流程先把导演时间重设为 0，再相对等待 500 ms，然后解除此前 Escort 组对象的分组。紧随其后的 `DESTORY Escort` 会立即成立，除非在移除分组后、等待指令前又创建了新的 Escort 组对象。
+
+代码也可调用 `ResetTimer(long)` 和 `RemoveGroup(string)`。传给 `ResetTimer` 的值必须为非负数；`RemoveGroup` 对不存在的分组不产生错误。
+
+### 5.3.9 重启和状态查询
 
 ```csharp
 if (director.IsCompleted)
@@ -392,7 +421,9 @@ director.Restart();
 | 某行不创建 | 时间未到、前置等待未满足、Prefab 未注册或行格式错误 | 查询当前索引；检查等待条件；核对名称和 Tab；修正后重启 |
 | 对象创建但字段未赋值 | JSON 错误、字段非 public、字段名不匹配或无转换器 | 按 Console 指定行/字段修正；必要时实现转换器 |
 | Component 未添加 | 类型不存在、简单名歧义或 `AddComponent` 失败 | 使用完整类型名；确认脚本可编译且允许动态添加 |
-| GROUP_EMPTY 永久等待 | 对象未销毁、Tracker 被移除、组名错误 | 检查组存活数和对象生命周期；保持 Tracker；统一组名 |
+| DESTORY 永久等待 | 对象仍存活、组名错误或期望对象未解除分组 | 检查组存活数；确认对象销毁或执行 REMOVE GROUP |
+| TIMER UNTIL 长时间等待 | 导演时间被 RESET 到较小值或所选时间源未推进 | 查询 ElapsedMilliseconds；检查 RESET 顺序和时间源 |
+| TIMER SLEEP 重新计时 | 等待期间由外部代码调用了 ResetTimer | 避免在活动的 SLEEP 上外部重设时间，或接受重新计时语义 |
 | SIGNAL 永久等待 | 未调用 SetSignal、控制器引用错误或名称不一致 | 检查调用路径；读取 `HasSignal`；统一名称 |
 | 恢复后瞬间批量刷新 | 挂起期间所选时间源继续推进 | 同步冻结时间源，或重载场景/在清理后 Restart |
 | 发布构建缺少扩展 | IL2CPP 裁剪了反射发现类型 | 增加 `[Preserve]`/`link.xml`，重新构建并真机验证 |
@@ -414,6 +445,7 @@ director.Restart();
 | Warning：找不到 Component/字段 | 当前组件或字段被跳过 | 使用完整类型名和 public field |
 | Error：字段初始化失败 | 转换或赋值失败，继续处理其他字段 | 按根因消息修正 Data 或转换器 |
 | Error：条件无法执行 | 等待行被跳过 | 注册求值器、修正参数或异常 |
+| Warning：RESET、REMOVE 或 TIMER 格式非法 | 当前控制指令被跳过 | 按第 5.3.2 条修正关键字、参数数量和非负毫秒值 |
 | Warning：转换器/条件创建失败 | 自动发现的扩展无法实例化 | 提供公开无参构造并检查异常 |
 
 ## 5.8 快速参考指南
@@ -421,8 +453,12 @@ director.Restart();
 | 任务 | 最短操作 |
 |---|---|
 | 定时创建 | `1000<Tab>Enemy<Tab>0<Tab>0<Tab>0<Tab>-<Tab>{"ComponentVar":[]}` |
-| 等到波次清空 | 对刷新行设置同一 group；随后写 `$WAIT GROUP_EMPTY WaveA` |
+| 等到波次清空 | 对刷新行设置同一 group；随后写 `$WAIT DESTORY WaveA` |
 | 等外部事件 | 写 `$WAIT SIGNAL Ready`；代码调用 `SetSignal("Ready")` |
+| 等到绝对时刻 | 写 `$WAIT TIMER UNTIL 5000` |
+| 等待一段时长 | 写 `$WAIT TIMER SLEEP 1000` |
+| 重设导演时间 | 写 `$RESET TIMER` 或 `$RESET TIMER 2500` |
+| 解除既有分组 | 写 `$REMOVE GROUP WaveA`；对象不会被销毁 |
 | 设置字段 | JSON 中指定 Component、Variables、Name、Data |
 | 观察完成 | 读取 `IsCompleted` |
 | 重新开始调度 | 清理旧对象后调用 `Restart()`，或重载场景 |
@@ -441,13 +477,15 @@ director.Restart();
 
 # 附录 A 完整配置示例
 
-下例在 1000 ms 创建两个敌人；两者全部销毁后越过屏障；到导演绝对时间 2500 ms 后创建 Boss。
+下例在 1000 ms 创建两个敌人；两者全部销毁后把导演时间重设为 2000 ms，再相对等待 500 ms。此时导演时间达到 2500 ms，Boss 刷新行立即执行。
 
 ```text
 # 时间、Prefab、X、Y、Z、分组、JSON；列之间为真实 Tab
 1000	Enemy01	-2	5	0	WaveA	{"ComponentVar":[{"Component":"Game.Enemy01Ctrl","Variables":[{"Name":"targetPosition","Data":{"x":0,"y":0,"z":0}},{"Name":"moveSpeed","Data":5},{"Name":"bulletPrefab","Data":"Bullet-001"}]}]}
 1000	Enemy01	2	5	0	WaveA	{"ComponentVar":[{"Component":"Game.Enemy01Ctrl","Variables":[{"Name":"targetPosition","Data":{"x":0,"y":0,"z":0}},{"Name":"moveSpeed","Data":5},{"Name":"bulletPrefab","Data":"Bullet-001"}]}]}
-$WAIT GROUP_EMPTY WaveA
+$WAIT DESTORY WaveA
+$RESET TIMER 2000
+$WAIT TIMER SLEEP 500
 2500	Boss01	0	6	0	Boss	{"ComponentVar":[{"Component":"Game.Boss01Ctrl","Variables":[{"Name":"HP","Data":5000},{"Name":"MoveSpeed","Data":3}]}]}
 ```
 
@@ -455,13 +493,18 @@ $WAIT GROUP_EMPTY WaveA
 
 ```text
 # 注释
-$WAIT TIME <非负毫秒>
-$WAIT GROUP_EMPTY <分组>
+$WAIT DESTORY <分组>
 $WAIT SIGNAL <信号>
+$WAIT TIMER UNTIL <非负毫秒>
+$WAIT TIMER SLEEP <非负毫秒>
+$RESET TIMER [非负毫秒]
+$REMOVE GROUP <分组>
 
 SpawnController.SetSignal(name, true|false)
 SpawnController.HasSignal(name)
 SpawnController.GetLivingGroupCount(group)
+SpawnController.ResetTimer(milliseconds)
+SpawnController.RemoveGroup(group)
 SpawnController.Restart()
 SpawnController.ElapsedMilliseconds
 SpawnController.CurrentInstructionIndex
@@ -478,11 +521,14 @@ SpawnController.IsCompleted
 | 4 | 空间与父子关系 | Local/World 和 Parent 结果符合 Inspector |
 | 5 | Component | 缺失组件被添加，已有组件被复用 |
 | 6 | 字段类型 | 各项目实际使用类型均正确赋值 |
-| 7 | 时间屏障 | TIME 在阈值前阻塞、阈值后放行 |
-| 8 | 分组屏障 | GROUP_EMPTY 在组对象全销毁后放行 |
-| 9 | 信号屏障 | SIGNAL 在 SetSignal 后放行 |
-| 10 | 错误隔离 | 故障行被记录，后续有效行仍执行 |
-| 11 | 挂起恢复 | 结果符合项目选定的时间源策略 |
-| 12 | 发布构建 | IL2CPP/目标平台上扩展类型未被裁剪 |
-| 13 | 追溯性 | 记录软件提交号、Unity 版本和配置提交号 |
+| 7 | 绝对时间屏障 | TIMER UNTIL 在阈值前阻塞、阈值后放行 |
+| 8 | 相对时长屏障 | TIMER SLEEP 从首次到达起等待指定时长 |
+| 9 | 分组屏障 | DESTORY 在组对象全销毁或移除分组后放行 |
+| 10 | 重设时间 | RESET TIMER 默认归零，并支持指定非负时间 |
+| 11 | 移除分组 | 既有对象不再被跟踪，后续同名组可重新登记 |
+| 12 | 信号屏障 | SIGNAL 在 SetSignal 后放行 |
+| 13 | 错误隔离 | 故障行被记录，后续有效行仍执行 |
+| 14 | 挂起恢复 | 结果符合项目选定的时间源策略 |
+| 15 | 发布构建 | IL2CPP/目标平台上扩展类型未被裁剪 |
+| 16 | 追溯性 | 记录软件提交号、Unity 版本和配置提交号 |
 

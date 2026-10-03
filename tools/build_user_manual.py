@@ -167,7 +167,7 @@ def configure_document(doc):
 
     header = section.header.paragraphs[0]
     header.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r = header.add_run("DDS-SUM-001　DataDrivenSpawn 软件用户手册　V1.0")
+    r = header.add_run("DDS-SUM-001　DataDrivenSpawn 软件用户手册　V1.1")
     set_run_font(r, size=8)
     footer = section.footer.paragraphs[0]
     add_page_number(footer)
@@ -190,10 +190,10 @@ def add_cover(doc):
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     meta = [
         ("文档编号", "DDS-SUM-001"),
-        ("文档版本", "V1.0"),
-        ("适用软件", "DataDrivenSpawn main@70e5596"),
+        ("文档版本", "V1.1"),
+        ("适用软件", "DataDrivenSpawn 指令集 V1.1"),
         ("文档状态", "正式版"),
-        ("编制日期", "2026-10-02"),
+        ("编制日期", "2026-10-03"),
         ("保密标识", "公开"),
     ]
     for i, (key, value) in enumerate(meta):

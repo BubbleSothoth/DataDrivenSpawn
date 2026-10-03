@@ -26,9 +26,17 @@ namespace DataDrivenSpawn
             initialized = true;
         }
 
+        /// <summary>解除当前对象与导演分组的关联，但不销毁对象。</summary>
+        internal void RemoveGroup()
+        {
+            initialized = false;
+            owner = null;
+            group = null;
+        }
+
         private void OnDestroy()
         {
-            if (initialized && owner != null) owner.NotifyDestroyed(group);
+            if (initialized && owner != null) owner.NotifyDestroyed(this, group);
         }
     }
 }

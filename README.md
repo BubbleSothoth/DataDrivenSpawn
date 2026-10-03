@@ -29,28 +29,37 @@ createTime<Tab>createName<Tab>posX<Tab>posY<Tab>posZ<Tab>group<Tab>json
 
 `createTime` 是导演启动后的绝对毫秒数。`group` 用于追踪同组对象，写 `-` 表示不分组。系统也兼容不含 `group` 的旧六列格式，JSON 内部可以包含 Tab。
 
-所有指令严格按文件顺序执行。这样等待指令可以形成流程屏障；位于等待指令后的刷新行，必须同时满足等待条件和自身时间条件。
+所有指令严格按文件顺序执行。等待指令可以形成流程屏障；重设时间和移除分组指令会在到达时立即执行。位于等待指令后的刷新行，必须同时满足等待条件和当前导演时间。
 
-## 条件指令
+## 导演指令
 
 ```text
-$WAIT TIME 5000
-$WAIT GROUP_EMPTY WaveA
+$WAIT DESTORY WaveA
 $WAIT SIGNAL BossIntroFinished
+$WAIT TIMER UNTIL 5000
+$WAIT TIMER SLEEP 1000
+$RESET TIMER
+$RESET TIMER 2500
+$REMOVE GROUP WaveA
 ```
 
-- `TIME`：等待导演时间达到指定毫秒数；
-- `GROUP_EMPTY`：等待指定分组内由该控制器创建的对象全部销毁；
+- `DESTORY`：等待指定分组内由该控制器创建的对象全部销毁；
 - `SIGNAL`：等待外部代码调用 `controller.SetSignal("BossIntroFinished")`。
+- `TIMER UNTIL`：等待导演时间达到指定毫秒数；
+- `TIMER SLEEP`：从流程首次到达该指令起等待指定毫秒数；
+- `RESET TIMER`：把导演时间重设为 0，或重设为可选的指定毫秒数；
+- `REMOVE GROUP`：解除该指令之前已登记到指定分组的对象。对象不会被销毁，后续同名分组仍可重新登记。
 
-为兼容旧配置，`DESTROY`、`GROUP_DESTROYED` 和历史拼写 `DESTORY` 均等价于 `GROUP_EMPTY`。
+为兼容旧配置，`GROUP_EMPTY`、`GROUP_DESTROYED` 和 `DESTROY` 仍按 `DESTORY` 处理；旧的 `$WAIT TIME ms` 仍按 `$WAIT TIMER UNTIL ms` 处理。新配置应使用上述规范写法。
 
 例如先创建一波敌人，全部击破后再创建 Boss：
 
 ```text
 500	Enemy01	-2	5	0	WaveA	{"ComponentVar":[]}
 500	Enemy01	2	5	0	WaveA	{"ComponentVar":[]}
-$WAIT GROUP_EMPTY WaveA
+$WAIT DESTORY WaveA
+$RESET TIMER 2500
+$WAIT TIMER SLEEP 500
 3000	Boss01	0	6	0	Boss	{"ComponentVar":[]}
 ```
 

@@ -48,13 +48,15 @@ namespace DataDrivenSpawn
 
         private readonly Dictionary<string, GameObject> prefabDictionary =
             new Dictionary<string, GameObject>(StringComparer.Ordinal);
-        private readonly Dictionary<string, int> livingGroupCounts =
-            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, HashSet<SpawnedObjectTracker>> trackedGroups =
+            new Dictionary<string, HashSet<SpawnedObjectTracker>>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> signals = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private IReadOnlyList<DirectorInstruction> instructions = new List<DirectorInstruction>();
         private int currentIndex;
         private float startTime;
         private bool scheduleStarted;
+        private int sleepingInstructionIndex = -1;
+        private long sleepUntilMilliseconds;
 
         /// <summary>获取当前控制器建立的 Prefab 注册表。</summary>
         public IReadOnlyDictionary<string, GameObject> PrefabDictionary { get { return prefabDictionary; } }
@@ -111,8 +113,34 @@ namespace DataDrivenSpawn
         public int GetLivingGroupCount(string group)
         {
             if (string.IsNullOrWhiteSpace(group)) return 0;
-            int count;
-            return livingGroupCounts.TryGetValue(group.Trim(), out count) ? count : 0;
+            HashSet<SpawnedObjectTracker> trackers;
+            return trackedGroups.TryGetValue(group.Trim(), out trackers) ? trackers.Count : 0;
+        }
+
+        /// <summary>将导演时间重设为指定非负毫秒数。</summary>
+        public void ResetTimer(long milliseconds = 0)
+        {
+            if (milliseconds < 0) throw new ArgumentOutOfRangeException(nameof(milliseconds));
+            startTime = CurrentTime - milliseconds / 1000f;
+            scheduleStarted = true;
+            sleepingInstructionIndex = -1;
+        }
+
+        /// <summary>解除此前已登记到指定分组的全部对象；对象本身不会被销毁。</summary>
+        public void RemoveGroup(string groupName)
+        {
+            if (string.IsNullOrWhiteSpace(groupName)) return;
+            string normalized = groupName.Trim();
+            HashSet<SpawnedObjectTracker> trackers;
+            if (!trackedGroups.TryGetValue(normalized, out trackers)) return;
+
+            trackedGroups.Remove(normalized);
+            SpawnedObjectTracker[] snapshot = new SpawnedObjectTracker[trackers.Count];
+            trackers.CopyTo(snapshot);
+            for (int index = 0; index < snapshot.Length; index++)
+            {
+                if (snapshot[index] != null) snapshot[index].RemoveGroup();
+            }
         }
 
         /// <summary>从头重新开始当前流程，但不会销毁此前创建的对象。</summary>
@@ -122,6 +150,7 @@ namespace DataDrivenSpawn
             signals.Clear();
             startTime = CurrentTime;
             scheduleStarted = true;
+            sleepingInstructionIndex = -1;
         }
 
         private void Awake()
@@ -179,6 +208,24 @@ namespace DataDrivenSpawn
                     continue;
                 }
 
+                ResetTimerRecord resetTimer = instruction as ResetTimerRecord;
+                if (resetTimer != null)
+                {
+                    ResetTimer(resetTimer.Milliseconds);
+                    currentIndex++;
+                    executed++;
+                    continue;
+                }
+
+                RemoveGroupRecord removeGroup = instruction as RemoveGroupRecord;
+                if (removeGroup != null)
+                {
+                    RemoveGroup(removeGroup.Group);
+                    currentIndex++;
+                    executed++;
+                    continue;
+                }
+
                 Debug.LogError("遇到未知导演指令，已跳过第 " + instruction.SourceLine + " 行。", this);
                 currentIndex++;
                 executed++;
@@ -228,20 +275,39 @@ namespace DataDrivenSpawn
 
         private void RegisterGroupObject(GameObject instance, string group)
         {
-            int count;
-            livingGroupCounts.TryGetValue(group, out count);
-            livingGroupCounts[group] = count + 1;
             SpawnedObjectTracker tracker = instance.GetComponent<SpawnedObjectTracker>();
             if (tracker == null) tracker = instance.AddComponent<SpawnedObjectTracker>();
             tracker.Initialize(this, group);
+            HashSet<SpawnedObjectTracker> trackers;
+            if (!trackedGroups.TryGetValue(group, out trackers))
+            {
+                trackers = new HashSet<SpawnedObjectTracker>();
+                trackedGroups.Add(group, trackers);
+            }
+
+            trackers.Add(tracker);
         }
 
-        internal void NotifyDestroyed(string group)
+        internal void NotifyDestroyed(SpawnedObjectTracker tracker, string group)
         {
-            int count;
-            if (!livingGroupCounts.TryGetValue(group, out count)) return;
-            if (count <= 1) livingGroupCounts.Remove(group);
-            else livingGroupCounts[group] = count - 1;
+            HashSet<SpawnedObjectTracker> trackers;
+            if (!trackedGroups.TryGetValue(group, out trackers)) return;
+            trackers.Remove(tracker);
+            if (trackers.Count == 0) trackedGroups.Remove(group);
+        }
+
+        internal bool HasSlept(long milliseconds)
+        {
+            if (sleepingInstructionIndex != currentIndex)
+            {
+                sleepingInstructionIndex = currentIndex;
+                long elapsed = ElapsedMilliseconds;
+                sleepUntilMilliseconds = milliseconds > long.MaxValue - elapsed
+                    ? long.MaxValue
+                    : elapsed + milliseconds;
+            }
+
+            return ElapsedMilliseconds >= sleepUntilMilliseconds;
         }
     }
 }

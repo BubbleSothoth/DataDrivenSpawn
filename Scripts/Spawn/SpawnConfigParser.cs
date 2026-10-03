@@ -2,7 +2,7 @@
  * 文件名称：SpawnConfigParser.cs
  *
  * 功能描述：
- *     将导演文本解析为按原文件顺序执行的刷新与等待指令。
+ *     将导演文本解析为按原文件顺序执行的刷新、等待与状态控制指令。
  *
  * 设计原则：
  *     1. 固定列只使用 Tab 分隔，JSON 内部可以继续包含 Tab；
@@ -70,6 +70,32 @@ namespace DataDrivenSpawn
         }
     }
 
+    /// <summary>表示一条重设导演时间的立即执行指令。</summary>
+    public sealed class ResetTimerRecord : DirectorInstruction
+    {
+        /// <summary>重设后的导演时间，单位为毫秒。</summary>
+        public long Milliseconds { get; private set; }
+
+        /// <summary>创建一条重设导演时间指令。</summary>
+        public ResetTimerRecord(long milliseconds, int sourceLine) : base(sourceLine)
+        {
+            Milliseconds = milliseconds;
+        }
+    }
+
+    /// <summary>表示一条解除已有对象分组归属的立即执行指令。</summary>
+    public sealed class RemoveGroupRecord : DirectorInstruction
+    {
+        /// <summary>需要移除的分组名称。</summary>
+        public string Group { get; private set; }
+
+        /// <summary>创建一条移除分组指令。</summary>
+        public RemoveGroupRecord(string group, int sourceLine) : base(sourceLine)
+        {
+            Group = group;
+        }
+    }
+
     /// <summary>提供导演文本到顺序指令列表的转换能力。</summary>
     public static class SpawnConfigParser
     {
@@ -114,29 +140,113 @@ namespace DataDrivenSpawn
         {
             instruction = null;
             string[] tokens = line.Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
-            if (tokens.Length < 2 || !string.Equals(tokens[0], "$WAIT", StringComparison.OrdinalIgnoreCase))
+            if (tokens.Length == 0)
             {
-                Debug.LogWarning("导演文本第 " + lineNumber + " 行指令非法。格式应为：$WAIT 条件 [参数...]。");
                 return false;
             }
 
-            string condition = NormalizeCondition(tokens[1]);
-            List<string> arguments = new List<string>(tokens.Length - 2);
-            for (int index = 2; index < tokens.Length; index++) arguments.Add(tokens[index]);
-            instruction = new WaitRecord(condition, arguments, lineNumber);
+            if (string.Equals(tokens[0], "$WAIT", StringComparison.OrdinalIgnoreCase))
+            {
+                return TryParseWait(tokens, lineNumber, out instruction);
+            }
+
+            if (string.Equals(tokens[0], "$RESET", StringComparison.OrdinalIgnoreCase))
+            {
+                return TryParseReset(tokens, lineNumber, out instruction);
+            }
+
+            if (string.Equals(tokens[0], "$REMOVE", StringComparison.OrdinalIgnoreCase))
+            {
+                return TryParseRemove(tokens, lineNumber, out instruction);
+            }
+
+            Debug.LogWarning("导演文本第 " + lineNumber + " 行指令非法，已跳过。");
+            return false;
+        }
+
+        private static bool TryParseWait(string[] tokens, int lineNumber, out DirectorInstruction instruction)
+        {
+            instruction = null;
+            if (tokens.Length < 2)
+            {
+                Debug.LogWarning("导演文本第 " + lineNumber + " 行 WAIT 指令缺少条件，已跳过。");
+                return false;
+            }
+
+            string keyword = tokens[1].Trim().ToUpperInvariant();
+            int argumentStart = 2;
+            if (keyword == "TIMER")
+            {
+                if (tokens.Length < 3)
+                {
+                    Debug.LogWarning("导演文本第 " + lineNumber + " 行 TIMER 指令缺少 UNTIL 或 SLEEP，已跳过。");
+                    return false;
+                }
+
+                string mode = tokens[2].Trim().ToUpperInvariant();
+                if (mode == "UNTIL") keyword = DirectorConditionNames.TimerUntil;
+                else if (mode == "SLEEP") keyword = DirectorConditionNames.TimerSleep;
+                else
+                {
+                    Debug.LogWarning("导演文本第 " + lineNumber + " 行 TIMER 模式非法，应为 UNTIL 或 SLEEP，已跳过。");
+                    return false;
+                }
+
+                argumentStart = 3;
+            }
+            else if (keyword == "DESTORY" || keyword == "DESTROY" || keyword == "GROUP_EMPTY" ||
+                     keyword == "GROUP_DESTROYED")
+            {
+                // GROUP_EMPTY 等旧拼写继续解析，但统一路由到新规范关键字 DESTORY。
+                keyword = DirectorConditionNames.Destory;
+            }
+            else if (keyword == "TIME")
+            {
+                // 兼容旧的绝对时间等待指令。
+                keyword = DirectorConditionNames.TimerUntil;
+            }
+
+            List<string> arguments = new List<string>(tokens.Length - argumentStart);
+            for (int index = argumentStart; index < tokens.Length; index++) arguments.Add(tokens[index]);
+            instruction = new WaitRecord(keyword, arguments, lineNumber);
             return true;
         }
 
-        private static string NormalizeCondition(string condition)
+        private static bool TryParseReset(string[] tokens, int lineNumber, out DirectorInstruction instruction)
         {
-            string normalized = condition.Trim().ToUpperInvariant();
-            // 兼容项目现有文本中的“Destory”拼写，并保留更直观的 Destroy 别名。
-            if (normalized == "DESTORY" || normalized == "DESTROY" || normalized == "GROUP_DESTROYED")
+            instruction = null;
+            if ((tokens.Length != 2 && tokens.Length != 3) ||
+                !string.Equals(tokens[1], "TIMER", StringComparison.OrdinalIgnoreCase))
             {
-                return DirectorConditionNames.GroupEmpty;
+                Debug.LogWarning("导演文本第 " + lineNumber + " 行 RESET 指令非法。格式应为：$RESET TIMER [ms_time]。");
+                return false;
             }
 
-            return normalized;
+            long milliseconds = 0;
+            if (tokens.Length == 3 &&
+                (!long.TryParse(tokens[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out milliseconds) ||
+                 milliseconds < 0))
+            {
+                Debug.LogWarning("导演文本第 " + lineNumber + " 行 RESET TIMER 参数必须是非负毫秒整数，已跳过。");
+                return false;
+            }
+
+            instruction = new ResetTimerRecord(milliseconds, lineNumber);
+            return true;
+        }
+
+        private static bool TryParseRemove(string[] tokens, int lineNumber, out DirectorInstruction instruction)
+        {
+            instruction = null;
+            if (tokens.Length != 3 || !string.Equals(tokens[1], "GROUP", StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(tokens[2]) || tokens[2] == "-")
+            {
+                Debug.LogWarning("导演文本第 " + lineNumber + " 行 REMOVE 指令非法。格式应为：$REMOVE GROUP GROUP_NAME。");
+                return false;
+            }
+
+            instruction = new RemoveGroupRecord(tokens[2].Trim(), lineNumber);
+            return true;
         }
 
         private static bool TryParseSpawn(string line, int lineNumber, out DirectorInstruction instruction)

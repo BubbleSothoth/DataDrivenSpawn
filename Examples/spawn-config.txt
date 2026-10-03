@@ -1,5 +1,7 @@
 # 格式：时间、Prefab、X、Y、Z、分组、JSON，各列之间使用真实 Tab。
 1000	Enemy01	-2	5	0	WaveA	{"ComponentVar":[{"Component":"Enemy01Ctrl","Variables":[{"Name":"targetPosition","Data":{"x":0,"y":0,"z":0}},{"Name":"moveSpeed","Data":5},{"Name":"bulletPrefab","Data":"Bullet-001"}]}]}
 1000	Enemy01	2	5	0	WaveA	{"ComponentVar":[{"Component":"Enemy01Ctrl","Variables":[{"Name":"targetPosition","Data":{"x":0,"y":0,"z":0}},{"Name":"moveSpeed","Data":5},{"Name":"bulletPrefab","Data":"Bullet-001"}]}]}
-$WAIT GROUP_EMPTY WaveA
+$WAIT DESTORY WaveA
+$RESET TIMER 2000
+$WAIT TIMER SLEEP 500
 2500	Boss01	0	6	0	Boss	{"ComponentVar":[{"Component":"Boss01Ctrl","Variables":[{"Name":"HP","Data":5000},{"Name":"MoveSpeed","Data":3}]}]}

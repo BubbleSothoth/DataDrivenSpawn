@@ -22,12 +22,18 @@ namespace DataDrivenSpawn
     /// <summary>内置导演条件的标准关键字。</summary>
     public static class DirectorConditionNames
     {
-        /// <summary>等待指定时间。</summary>
-        public const string Time = "TIME";
+        /// <summary>等待导演时间达到指定毫秒数。</summary>
+        public const string TimerUntil = "TIMER_UNTIL";
+        /// <summary>从到达指令时起等待指定毫秒数。</summary>
+        public const string TimerSleep = "TIMER_SLEEP";
         /// <summary>等待外部信号。</summary>
         public const string Signal = "SIGNAL";
         /// <summary>等待指定刷新分组中没有存活对象。</summary>
-        public const string GroupEmpty = "GROUP_EMPTY";
+        public const string Destory = "DESTORY";
+        /// <summary>旧版 TIME 名称的兼容常量。</summary>
+        public const string Time = TimerUntil;
+        /// <summary>旧版 GROUP_EMPTY 名称的兼容常量。</summary>
+        public const string GroupEmpty = Destory;
     }
 
     /// <summary>向条件求值器提供只读的导演运行状态。</summary>
@@ -50,6 +56,8 @@ namespace DataDrivenSpawn
         public bool HasSignal(string signalName) { return controller.HasSignal(signalName); }
         /// <summary>获取指定分组的存活对象数。</summary>
         public int GetLivingGroupCount(string group) { return controller.GetLivingGroupCount(group); }
+        /// <summary>判断当前等待指令是否已持续指定毫秒数。</summary>
+        public bool HasSlept(long milliseconds) { return controller.HasSlept(milliseconds); }
     }
 
     /// <summary>定义一个可以通过“$WAIT 关键字 参数”使用的导演条件。</summary>
@@ -162,12 +170,12 @@ namespace DataDrivenSpawn
         }
     }
 
-    /// <summary>等待导演时间达到指定毫秒数。</summary>
+    /// <summary>等待导演时间达到指定绝对毫秒数。</summary>
     [Preserve]
     public sealed class TimeConditionEvaluator : ISpawnConditionEvaluator
     {
         /// <inheritdoc />
-        public string Keyword { get { return DirectorConditionNames.Time; } }
+        public string Keyword { get { return DirectorConditionNames.TimerUntil; } }
 
         /// <inheritdoc />
         public bool IsSatisfied(DirectorContext context, IReadOnlyList<string> arguments)
@@ -176,7 +184,7 @@ namespace DataDrivenSpawn
             long milliseconds;
             if (!long.TryParse(arguments[0], out milliseconds) || milliseconds < 0)
             {
-                throw new FormatException("TIME 的参数必须是非负毫秒整数。");
+                throw new FormatException("TIMER UNTIL 的参数必须是非负毫秒整数。");
             }
 
             return context.ElapsedMilliseconds >= milliseconds;
@@ -188,6 +196,27 @@ namespace DataDrivenSpawn
             {
                 throw new FormatException(keyword + " 需要 " + count + " 个参数。");
             }
+        }
+    }
+
+    /// <summary>从导演到达当前指令时起等待指定毫秒数。</summary>
+    [Preserve]
+    public sealed class SleepConditionEvaluator : ISpawnConditionEvaluator
+    {
+        /// <inheritdoc />
+        public string Keyword { get { return DirectorConditionNames.TimerSleep; } }
+
+        /// <inheritdoc />
+        public bool IsSatisfied(DirectorContext context, IReadOnlyList<string> arguments)
+        {
+            TimeConditionEvaluator.RequireArgumentCount(arguments, 1, Keyword);
+            long milliseconds;
+            if (!long.TryParse(arguments[0], out milliseconds) || milliseconds < 0)
+            {
+                throw new FormatException("TIMER SLEEP 的参数必须是非负毫秒整数。");
+            }
+
+            return context.HasSlept(milliseconds);
         }
     }
 
@@ -211,7 +240,7 @@ namespace DataDrivenSpawn
     public sealed class GroupEmptyConditionEvaluator : ISpawnConditionEvaluator
     {
         /// <inheritdoc />
-        public string Keyword { get { return DirectorConditionNames.GroupEmpty; } }
+        public string Keyword { get { return DirectorConditionNames.Destory; } }
 
         /// <inheritdoc />
         public bool IsSatisfied(DirectorContext context, IReadOnlyList<string> arguments)
